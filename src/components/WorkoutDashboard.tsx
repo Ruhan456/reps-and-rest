@@ -3,14 +3,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Calendar, Dumbbell, Flame, Target, TrendingUp } from 'lucide-react';
-
-interface WorkoutSplit {
-  id: string;
-  name: string;
-  days: string[];
-  currentDay: number;
-  lastWorkoutDate: string | null;
-}
+import { storage, type WorkoutSplit } from '@/lib/storage';
 
 interface WorkoutDashboardProps {
   onStartWorkout: () => void;
@@ -19,31 +12,45 @@ interface WorkoutDashboardProps {
 }
 
 export const WorkoutDashboard = ({ onStartWorkout, onViewSplit, onViewProgress }: WorkoutDashboardProps) => {
-  const [currentSplit, setCurrentSplit] = useState<WorkoutSplit>({
-    id: '1',
-    name: 'Push/Pull/Legs',
-    days: ['Push', 'Pull', 'Legs', 'Rest', 'Push', 'Pull', 'Legs'],
-    currentDay: 0,
-    lastWorkoutDate: null
-  });
-  
+  const [currentSplit, setCurrentSplit] = useState<WorkoutSplit | null>(null);
   const [streak, setStreak] = useState(0);
-  const [weekProgress, setWeekProgress] = useState(3);
+  const [weekProgress, setWeekProgress] = useState(0);
 
   useEffect(() => {
-    // Load saved data from localStorage
-    const savedSplit = localStorage.getItem('workoutSplit');
-    const savedStreak = localStorage.getItem('workoutStreak');
-    
-    if (savedSplit) {
-      setCurrentSplit(JSON.parse(savedSplit));
-    }
-    if (savedStreak) {
-      setStreak(parseInt(savedStreak));
-    }
+    loadDashboardData();
   }, []);
 
+  const loadDashboardData = () => {
+    // Load active split
+    const activeSplit = storage.getActiveSplit();
+    if (activeSplit) {
+      setCurrentSplit(activeSplit);
+    } else {
+      // Set first split as active if none is set
+      const splits = storage.getWorkoutSplits();
+      if (splits.length > 0) {
+        storage.setActiveSplit(splits[0].id);
+        setCurrentSplit(splits[0]);
+      }
+    }
+
+    // Load streak
+    setStreak(storage.getStreak());
+
+    // Calculate week progress
+    const sessions = storage.getWorkoutSessions();
+    const thisWeekStart = new Date();
+    thisWeekStart.setDate(thisWeekStart.getDate() - thisWeekStart.getDay());
+    thisWeekStart.setHours(0, 0, 0, 0);
+    
+    const thisWeekSessions = sessions.filter(session => 
+      new Date(session.date) >= thisWeekStart && session.completed
+    );
+    setWeekProgress(thisWeekSessions.length);
+  };
+
   const getCurrentWorkout = () => {
+    if (!currentSplit) return 'Rest';
     return currentSplit.days[currentSplit.currentDay];
   };
 
@@ -73,11 +80,11 @@ export const WorkoutDashboard = ({ onStartWorkout, onViewSplit, onViewProgress }
             </div>
             <div>
               <h2 className="text-xl font-semibold">Today's Workout</h2>
-              <p className="text-sm text-muted-foreground">{currentSplit.name}</p>
+              <p className="text-sm text-muted-foreground">{currentSplit?.name || 'No Split Active'}</p>
             </div>
           </div>
           <Badge variant="secondary" className="text-lg px-4 py-2">
-            Day {currentSplit.currentDay + 1}
+            Day {(currentSplit?.currentDay || 0) + 1}
           </Badge>
         </div>
 
@@ -156,20 +163,20 @@ export const WorkoutDashboard = ({ onStartWorkout, onViewSplit, onViewProgress }
           This Week's Plan
         </h3>
         <div className="flex gap-2">
-          {currentSplit.days.map((day, index) => (
+          {currentSplit?.days.map((day, index) => (
             <div 
               key={index}
               className={`flex-1 p-2 rounded-lg text-center text-xs font-medium transition-all ${
-                index === currentSplit.currentDay 
+                index === (currentSplit?.currentDay || 0)
                   ? 'bg-gradient-accent text-accent-foreground shadow-glow' 
-                  : index < currentSplit.currentDay
+                  : index < (currentSplit?.currentDay || 0)
                   ? 'bg-success text-success-foreground'
                   : 'bg-secondary text-secondary-foreground'
               }`}
             >
               {day}
             </div>
-          ))}
+          )) || <div className="text-muted-foreground text-center">No split active</div>}
         </div>
       </Card>
     </div>

@@ -4,16 +4,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { ArrowLeft, Plus, Edit, Trash2, SkipForward, Calendar } from 'lucide-react';
+import { ArrowLeft, Plus, Edit, Trash2, SkipForward, Calendar, Settings } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-
-interface WorkoutSplit {
-  id: string;
-  name: string;
-  days: string[];
-  currentDay: number;
-  lastWorkoutDate: string | null;
-}
+import { storage, type WorkoutSplit } from '@/lib/storage';
 
 interface WorkoutSplitManagerProps {
   onBack: () => void;
@@ -23,64 +16,35 @@ export const WorkoutSplitManager = ({ onBack }: WorkoutSplitManagerProps) => {
   const { toast } = useToast();
   const [splits, setSplits] = useState<WorkoutSplit[]>([]);
   const [activeSplit, setActiveSplit] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [newSplitName, setNewSplitName] = useState('');
   const [newSplitDays, setNewSplitDays] = useState<string[]>(['']);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
 
   useEffect(() => {
-    // Load splits from localStorage
-    const savedSplits = localStorage.getItem('workoutSplits');
-    const savedActiveSplit = localStorage.getItem('activeSplit');
-    
-    if (savedSplits) {
-      setSplits(JSON.parse(savedSplits));
-    } else {
-      // Default splits
-      const defaultSplits = [
-        {
-          id: '1',
-          name: 'Push/Pull/Legs',
-          days: ['Push', 'Pull', 'Legs', 'Rest', 'Push', 'Pull', 'Legs'],
-          currentDay: 0,
-          lastWorkoutDate: null
-        },
-        {
-          id: '2',
-          name: 'Upper/Lower',
-          days: ['Upper', 'Lower', 'Rest', 'Upper', 'Lower', 'Rest', 'Rest'],
-          currentDay: 0,
-          lastWorkoutDate: null
-        },
-        {
-          id: '3',
-          name: 'Full Body',
-          days: ['Full Body', 'Rest', 'Full Body', 'Rest', 'Full Body', 'Rest', 'Rest'],
-          currentDay: 0,
-          lastWorkoutDate: null
-        }
-      ];
-      setSplits(defaultSplits);
-      localStorage.setItem('workoutSplits', JSON.stringify(defaultSplits));
-    }
-    
-    if (savedActiveSplit) {
-      setActiveSplit(savedActiveSplit);
-    }
+    loadSplits();
   }, []);
+
+  const loadSplits = () => {
+    const loadedSplits = storage.getWorkoutSplits();
+    setSplits(loadedSplits);
+    
+    const activeId = localStorage.getItem('activeSplit');
+    if (activeId) {
+      setActiveSplit(activeId);
+    } else if (loadedSplits.length > 0) {
+      setActiveSplit(loadedSplits[0].id);
+      storage.setActiveSplit(loadedSplits[0].id);
+    }
+  };
 
   const saveSplits = (newSplits: WorkoutSplit[]) => {
     setSplits(newSplits);
-    localStorage.setItem('workoutSplits', JSON.stringify(newSplits));
+    storage.saveWorkoutSplits(newSplits);
   };
 
   const setActiveWorkoutSplit = (splitId: string) => {
     setActiveSplit(splitId);
-    localStorage.setItem('activeSplit', splitId);
-    const split = splits.find(s => s.id === splitId);
-    if (split) {
-      localStorage.setItem('workoutSplit', JSON.stringify(split));
-    }
+    storage.setActiveSplit(splitId);
     toast({
       title: "Split Activated!",
       description: "Your workout split has been updated.",
@@ -88,26 +52,18 @@ export const WorkoutSplitManager = ({ onBack }: WorkoutSplitManagerProps) => {
   };
 
   const skipDay = (splitId: string) => {
-    const newSplits = splits.map(split => {
-      if (split.id === splitId) {
-        const nextDay = (split.currentDay + 1) % split.days.length;
-        const updatedSplit = { ...split, currentDay: nextDay };
-        
-        // Update active split in localStorage if this is the active one
-        if (splitId === activeSplit) {
-          localStorage.setItem('workoutSplit', JSON.stringify(updatedSplit));
-        }
-        
-        return updatedSplit;
-      }
-      return split;
-    });
-    
-    saveSplits(newSplits);
-    toast({
-      title: "Day Skipped",
-      description: "Moved to next workout day.",
-    });
+    const updatedSplit = splits.find(s => s.id === splitId);
+    if (updatedSplit) {
+      const nextDay = (updatedSplit.currentDay + 1) % updatedSplit.days.length;
+      const newSplit = { ...updatedSplit, currentDay: nextDay };
+      storage.updateSplit(newSplit);
+      setSplits(prev => prev.map(s => s.id === splitId ? newSplit : s));
+      
+      toast({
+        title: "Day Skipped",
+        description: "Moved to next workout day.",
+      });
+    }
   };
 
   const createSplit = () => {

@@ -3,13 +3,15 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { CheckCircle, Plus, Minus, RotateCcw, Save, ArrowLeft } from 'lucide-react';
+import { CheckCircle, Plus, Minus, Save, ArrowLeft, Settings } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { storage, type WorkoutSession } from '@/lib/storage';
 
 interface Exercise {
   id: string;
   name: string;
   sets: Set[];
+  defaultSets: number;
   lastWeight?: number;
   lastReps?: number;
 }
@@ -25,58 +27,28 @@ interface WorkoutTrackerProps {
   workoutType: string;
   onBack: () => void;
   onComplete: () => void;
+  onManageExercises: () => void;
 }
 
-export const WorkoutTracker = ({ workoutType, onBack, onComplete }: WorkoutTrackerProps) => {
+export const WorkoutTracker = ({ workoutType, onBack, onComplete, onManageExercises }: WorkoutTrackerProps) => {
   const { toast } = useToast();
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [currentExerciseIndex, setCurrentExerciseIndex] = useState(0);
   const [restTimer, setRestTimer] = useState(0);
   const [isResting, setIsResting] = useState(false);
+  const [sessionId] = useState(() => `session-${Date.now()}`);
 
   useEffect(() => {
-    // Initialize exercises based on workout type
-    const getExercisesForWorkout = (type: string): Exercise[] => {
-      const exerciseTemplates = {
-        'Push': [
-          { name: 'Bench Press', sets: 4 },
-          { name: 'Overhead Press', sets: 3 },
-          { name: 'Incline Dumbbell Press', sets: 3 },
-          { name: 'Tricep Dips', sets: 3 },
-          { name: 'Lateral Raises', sets: 3 }
-        ],
-        'Pull': [
-          { name: 'Deadlift', sets: 4 },
-          { name: 'Pull-ups', sets: 3 },
-          { name: 'Barbell Rows', sets: 3 },
-          { name: 'Face Pulls', sets: 3 },
-          { name: 'Bicep Curls', sets: 3 }
-        ],
-        'Legs': [
-          { name: 'Squats', sets: 4 },
-          { name: 'Romanian Deadlift', sets: 3 },
-          { name: 'Bulgarian Split Squats', sets: 3 },
-          { name: 'Calf Raises', sets: 3 },
-          { name: 'Walking Lunges', sets: 3 }
-        ]
-      };
+    initializeWorkout();
+    
+    // Set up auto-save every 10 seconds
+    const interval = setInterval(() => {
+      autoSaveWorkout();
+    }, 10000);
 
-      const templates = exerciseTemplates[type as keyof typeof exerciseTemplates] || [];
-      return templates.map((template, index) => ({
-        id: `exercise-${index}`,
-        name: template.name,
-        sets: Array.from({ length: template.sets }, (_, setIndex) => ({
-          id: `set-${index}-${setIndex}`,
-          weight: 0,
-          reps: 0,
-          completed: false
-        })),
-        lastWeight: getLastWorkoutData(template.name)?.weight,
-        lastReps: getLastWorkoutData(template.name)?.reps
-      }));
+    return () => {
+      clearInterval(interval);
     };
-
-    setExercises(getExercisesForWorkout(workoutType));
   }, [workoutType]);
 
   useEffect(() => {
@@ -99,9 +71,58 @@ export const WorkoutTracker = ({ workoutType, onBack, onComplete }: WorkoutTrack
     return () => clearInterval(interval);
   }, [isResting, restTimer, toast]);
 
-  const getLastWorkoutData = (exerciseName: string) => {
-    const lastWorkout = localStorage.getItem(`lastWorkout-${exerciseName}`);
-    return lastWorkout ? JSON.parse(lastWorkout) : null;
+  const initializeWorkout = () => {
+    // Check for auto-saved workout first
+    const autoSaved = storage.getAutoSave(`workout-${workoutType}`);
+    if (autoSaved) {
+      setExercises(autoSaved.exercises);
+      setCurrentExerciseIndex(autoSaved.currentExerciseIndex || 0);
+      toast({
+        title: "Workout Restored",
+        description: "Continuing from where you left off",
+      });
+      return;
+    }
+
+    // Load template and create workout
+    const template = storage.getWorkoutTemplate(workoutType);
+    if (!template || template.exercises.length === 0) {
+      toast({
+        title: "No Exercises Found",
+        description: "Please add exercises to this workout type first",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    const workoutExercises = template.exercises.map((exercise, index) => {
+      const history = storage.getExerciseHistory(exercise.name);
+      return {
+        id: exercise.id,
+        name: exercise.name,
+        defaultSets: exercise.sets,
+        sets: Array.from({ length: exercise.sets }, (_, setIndex) => ({
+          id: `set-${index}-${setIndex}`,
+          weight: history?.weight || 0,
+          reps: history?.reps || 0,
+          completed: false
+        })),
+        lastWeight: history?.weight,
+        lastReps: history?.reps
+      };
+    });
+
+    setExercises(workoutExercises);
+  };
+
+  const autoSaveWorkout = () => {
+    if (exercises.length > 0) {
+      storage.autoSave(`workout-${workoutType}`, {
+        exercises,
+        currentExerciseIndex,
+        sessionId
+      });
+    }
   };
 
   const updateSet = (exerciseIndex: number, setIndex: number, field: 'weight' | 'reps', value: number) => {
@@ -113,6 +134,9 @@ export const WorkoutTracker = ({ workoutType, onBack, onComplete }: WorkoutTrack
         )
       } : exercise
     ));
+    
+    // Auto-save after changes
+    setTimeout(autoSaveWorkout, 100);
   };
 
   const completeSet = (exerciseIndex: number, setIndex: number) => {
@@ -145,25 +169,49 @@ export const WorkoutTracker = ({ workoutType, onBack, onComplete }: WorkoutTrack
       title: "Set Complete!",
       description: `${set.weight}kg × ${set.reps} reps recorded`,
     });
+
+    // Auto-save after completing set
+    setTimeout(autoSaveWorkout, 100);
   };
 
   const saveWorkout = () => {
-    // Save workout data to localStorage
-    exercises.forEach(exercise => {
-      const completedSets = exercise.sets.filter(set => set.completed);
-      if (completedSets.length > 0) {
-        const lastSet = completedSets[completedSets.length - 1];
-        localStorage.setItem(`lastWorkout-${exercise.name}`, JSON.stringify({
-          weight: lastSet.weight,
-          reps: lastSet.reps,
-          date: new Date().toISOString()
-        }));
-      }
-    });
+    // Create workout session
+    const session: WorkoutSession = {
+      id: sessionId,
+      date: new Date().toISOString(),
+      workoutType,
+      exercises: exercises.map(exercise => ({
+        exerciseId: exercise.id,
+        name: exercise.name,
+        sets: exercise.sets.map(set => ({
+          weight: set.weight,
+          reps: set.reps,
+          completed: set.completed
+        }))
+      })),
+      completed: true
+    };
+
+    // Save session using storage utility
+    storage.saveWorkoutSession(session);
 
     // Update streak
-    const currentStreak = parseInt(localStorage.getItem('workoutStreak') || '0');
-    localStorage.setItem('workoutStreak', (currentStreak + 1).toString());
+    storage.updateStreak();
+
+    // Update current split day
+    const activeSplit = storage.getActiveSplit();
+    if (activeSplit) {
+      const nextDay = (activeSplit.currentDay + 1) % activeSplit.days.length;
+      const updatedSplit = { 
+        ...activeSplit, 
+        currentDay: nextDay, 
+        lastWorkoutDate: new Date().toISOString() 
+      };
+      storage.updateSplit(updatedSplit);
+    }
+
+    // Clear auto-save
+    storage.clearAutoSave(`workout-${workoutType}`);
 
     onComplete();
     
@@ -176,6 +224,46 @@ export const WorkoutTracker = ({ workoutType, onBack, onComplete }: WorkoutTrack
   const currentExercise = exercises[currentExerciseIndex];
   const completedSets = currentExercise?.sets.filter(set => set.completed).length || 0;
   const totalSets = currentExercise?.sets.length || 0;
+
+  if (!currentExercise) {
+    return (
+      <div className="space-y-6 p-6">
+        <div className="flex items-center justify-between">
+          <Button
+            variant="ghost"
+            onClick={onBack}
+            className="flex items-center gap-2"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back
+          </Button>
+          <h1 className="text-2xl font-bold">{workoutType} Workout</h1>
+          <Button
+            variant="ghost"
+            onClick={onManageExercises}
+            className="flex items-center gap-2"
+          >
+            <Settings className="h-4 w-4" />
+            Manage
+          </Button>
+        </div>
+
+        <Card className="p-8 text-center bg-gradient-card">
+          <Settings className="h-12 w-12 mx-auto mb-3 text-muted-foreground" />
+          <h3 className="font-semibold mb-2">No Exercises Configured</h3>
+          <p className="text-sm text-muted-foreground mb-4">
+            Add exercises to your {workoutType} workout to get started
+          </p>
+          <Button
+            onClick={onManageExercises}
+            className="bg-gradient-accent hover:opacity-90"
+          >
+            Add Exercises
+          </Button>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 p-6">
@@ -195,14 +283,23 @@ export const WorkoutTracker = ({ workoutType, onBack, onComplete }: WorkoutTrack
             Exercise {currentExerciseIndex + 1} of {exercises.length}
           </p>
         </div>
-        <Button
-          variant="ghost"
-          onClick={saveWorkout}
-          className="flex items-center gap-2"
-        >
-          <Save className="h-4 w-4" />
-          Save
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="ghost"
+            onClick={onManageExercises}
+            className="flex items-center gap-2"
+          >
+            <Settings className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={saveWorkout}
+            className="flex items-center gap-2"
+          >
+            <Save className="h-4 w-4" />
+            Save
+          </Button>
+        </div>
       </div>
 
       {/* Rest Timer */}
@@ -216,140 +313,138 @@ export const WorkoutTracker = ({ workoutType, onBack, onComplete }: WorkoutTrack
       )}
 
       {/* Current Exercise */}
-      {currentExercise && (
-        <Card className="p-6 bg-gradient-card shadow-elevated">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-xl font-bold">{currentExercise.name}</h2>
-              <p className="text-sm text-muted-foreground">
-                Set {completedSets + 1} of {totalSets}
-              </p>
-            </div>
-            <Badge variant="secondary">
-              {completedSets}/{totalSets} completed
-            </Badge>
+      <Card className="p-6 bg-gradient-card shadow-elevated">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-xl font-bold">{currentExercise.name}</h2>
+            <p className="text-sm text-muted-foreground">
+              Set {completedSets + 1} of {totalSets}
+            </p>
           </div>
+          <Badge variant="secondary">
+            {completedSets}/{totalSets} completed
+          </Badge>
+        </div>
 
-          {/* Last workout reference */}
-          {currentExercise.lastWeight && currentExercise.lastReps && (
-            <Card className="p-3 mb-4 bg-muted">
-              <p className="text-sm text-muted-foreground">
-                Last workout: {currentExercise.lastWeight}kg × {currentExercise.lastReps} reps
-              </p>
-            </Card>
-          )}
+        {/* Last workout reference */}
+        {currentExercise.lastWeight && currentExercise.lastReps && (
+          <Card className="p-3 mb-4 bg-muted">
+            <p className="text-sm text-muted-foreground">
+              Last workout: {currentExercise.lastWeight}kg × {currentExercise.lastReps} reps
+            </p>
+          </Card>
+        )}
 
-          {/* Sets */}
-          <div className="space-y-3">
-            {currentExercise.sets.map((set, setIndex) => (
-              <div 
-                key={set.id}
-                className={`p-4 rounded-lg border transition-all ${
-                  set.completed 
-                    ? 'bg-success/10 border-success' 
-                    : setIndex === completedSets 
-                    ? 'bg-accent/10 border-accent shadow-glow' 
-                    : 'bg-secondary border-border'
-                }`}
-              >
-                <div className="flex items-center gap-4">
-                  <div className="text-sm font-medium w-12">
-                    Set {setIndex + 1}
-                  </div>
-                  
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => updateSet(currentExerciseIndex, setIndex, 'weight', Math.max(0, set.weight - 2.5))}
-                      disabled={set.completed}
-                    >
-                      <Minus className="h-3 w-3" />
-                    </Button>
-                    <Input
-                      type="number"
-                      value={set.weight || ''}
-                      onChange={(e) => updateSet(currentExerciseIndex, setIndex, 'weight', parseFloat(e.target.value) || 0)}
-                      className="w-20 text-center"
-                      placeholder="kg"
-                      disabled={set.completed}
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => updateSet(currentExerciseIndex, setIndex, 'weight', set.weight + 2.5)}
-                      disabled={set.completed}
-                    >
-                      <Plus className="h-3 w-3" />
-                    </Button>
-                  </div>
-
-                  <span className="text-muted-foreground">×</span>
-
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => updateSet(currentExerciseIndex, setIndex, 'reps', Math.max(0, set.reps - 1))}
-                      disabled={set.completed}
-                    >
-                      <Minus className="h-3 w-3" />
-                    </Button>
-                    <Input
-                      type="number"
-                      value={set.reps || ''}
-                      onChange={(e) => updateSet(currentExerciseIndex, setIndex, 'reps', parseInt(e.target.value) || 0)}
-                      className="w-16 text-center"
-                      placeholder="reps"
-                      disabled={set.completed}
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => updateSet(currentExerciseIndex, setIndex, 'reps', set.reps + 1)}
-                      disabled={set.completed}
-                    >
-                      <Plus className="h-3 w-3" />
-                    </Button>
-                  </div>
-
-                  {!set.completed ? (
-                    <Button
-                      onClick={() => completeSet(currentExerciseIndex, setIndex)}
-                      disabled={setIndex !== completedSets}
-                      className="bg-gradient-success hover:opacity-90"
-                    >
-                      <CheckCircle className="h-4 w-4" />
-                    </Button>
-                  ) : (
-                    <CheckCircle className="h-4 w-4 text-success" />
-                  )}
+        {/* Sets */}
+        <div className="space-y-3">
+          {currentExercise.sets.map((set, setIndex) => (
+            <div 
+              key={set.id}
+              className={`p-4 rounded-lg border transition-all ${
+                set.completed 
+                  ? 'bg-success/10 border-success' 
+                  : setIndex === completedSets 
+                  ? 'bg-accent/10 border-accent shadow-glow' 
+                  : 'bg-secondary border-border'
+              }`}
+            >
+              <div className="flex items-center gap-4">
+                <div className="text-sm font-medium w-12">
+                  Set {setIndex + 1}
                 </div>
-              </div>
-            ))}
-          </div>
+                
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => updateSet(currentExerciseIndex, setIndex, 'weight', Math.max(0, set.weight - 2.5))}
+                    disabled={set.completed}
+                  >
+                    <Minus className="h-3 w-3" />
+                  </Button>
+                  <Input
+                    type="number"
+                    value={set.weight || ''}
+                    onChange={(e) => updateSet(currentExerciseIndex, setIndex, 'weight', parseFloat(e.target.value) || 0)}
+                    className="w-20 text-center"
+                    placeholder="kg"
+                    disabled={set.completed}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => updateSet(currentExerciseIndex, setIndex, 'weight', set.weight + 2.5)}
+                    disabled={set.completed}
+                  >
+                    <Plus className="h-3 w-3" />
+                  </Button>
+                </div>
 
-          {/* Exercise Navigation */}
-          <div className="flex gap-3 mt-6">
-            <Button
-              variant="outline"
-              onClick={() => setCurrentExerciseIndex(Math.max(0, currentExerciseIndex - 1))}
-              disabled={currentExerciseIndex === 0}
-              className="flex-1"
-            >
-              Previous Exercise
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => setCurrentExerciseIndex(Math.min(exercises.length - 1, currentExerciseIndex + 1))}
-              disabled={currentExerciseIndex === exercises.length - 1}
-              className="flex-1"
-            >
-              Next Exercise
-            </Button>
-          </div>
-        </Card>
-      )}
+                <span className="text-muted-foreground">×</span>
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => updateSet(currentExerciseIndex, setIndex, 'reps', Math.max(0, set.reps - 1))}
+                    disabled={set.completed}
+                  >
+                    <Minus className="h-3 w-3" />
+                  </Button>
+                  <Input
+                    type="number"
+                    value={set.reps || ''}
+                    onChange={(e) => updateSet(currentExerciseIndex, setIndex, 'reps', parseInt(e.target.value) || 0)}
+                    className="w-16 text-center"
+                    placeholder="reps"
+                    disabled={set.completed}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => updateSet(currentExerciseIndex, setIndex, 'reps', set.reps + 1)}
+                    disabled={set.completed}
+                  >
+                    <Plus className="h-3 w-3" />
+                  </Button>
+                </div>
+
+                {!set.completed ? (
+                  <Button
+                    onClick={() => completeSet(currentExerciseIndex, setIndex)}
+                    disabled={setIndex !== completedSets}
+                    className="bg-gradient-success hover:opacity-90"
+                  >
+                    <CheckCircle className="h-4 w-4" />
+                  </Button>
+                ) : (
+                  <CheckCircle className="h-4 w-4 text-success" />
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Exercise Navigation */}
+        <div className="flex gap-3 mt-6">
+          <Button
+            variant="outline"
+            onClick={() => setCurrentExerciseIndex(Math.max(0, currentExerciseIndex - 1))}
+            disabled={currentExerciseIndex === 0}
+            className="flex-1"
+          >
+            Previous Exercise
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => setCurrentExerciseIndex(Math.min(exercises.length - 1, currentExerciseIndex + 1))}
+            disabled={currentExerciseIndex === exercises.length - 1}
+            className="flex-1"
+          >
+            Next Exercise
+          </Button>
+        </div>
+      </Card>
     </div>
   );
 };

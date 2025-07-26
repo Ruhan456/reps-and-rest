@@ -3,8 +3,9 @@ import { WorkoutDashboard } from '@/components/WorkoutDashboard';
 import { WorkoutTracker } from '@/components/WorkoutTracker';
 import { WorkoutSplitManager } from '@/components/WorkoutSplitManager';
 import { ProgressTracker } from '@/components/ProgressTracker';
+import { ExerciseManager } from '@/components/ExerciseManager';
 
-type View = 'dashboard' | 'workout' | 'split' | 'progress';
+type View = 'dashboard' | 'workout' | 'split' | 'progress' | 'exercises';
 
 const Index = () => {
   const [currentView, setCurrentView] = useState<View>('dashboard');
@@ -43,6 +44,7 @@ const Index = () => {
             workoutType={currentWorkoutType}
             onBack={() => setCurrentView('dashboard')}
             onComplete={handleCompleteWorkout}
+            onManageExercises={() => setCurrentView('exercises')}
           />
         );
       case 'split':
@@ -55,6 +57,13 @@ const Index = () => {
         return (
           <ProgressTracker
             onBack={() => setCurrentView('dashboard')}
+          />
+        );
+      case 'exercises':
+        return (
+          <ExerciseManager
+            workoutType={currentWorkoutType}
+            onBack={() => setCurrentView('workout')}
           />
         );
       default:
